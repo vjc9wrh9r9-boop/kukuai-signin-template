@@ -346,8 +346,13 @@ class Session:
             self.shot("no-center")
             r["screenshot"] = self.shots[-1] if self.shots else None
             return
-        self.close_dialog()
-        self.page.wait_for_timeout(800)
+        # 注意：这里不能再点 activity-dialog-close，会把刚打开的任务中心一起关掉
+        self.page.wait_for_timeout(1200)
+        if self.frame() is None and not self.open_center():
+            r.update(stage="open-task-center", error="任务中心打开后又被关闭，重试失败")
+            self.shot("center-closed")
+            r["screenshot"] = self.shots[-1] if self.shots else None
+            return
 
         streak = self._streak()
         r["streak"] = streak
@@ -408,9 +413,8 @@ class Session:
             r["screenshot"] = self.shots[-1] if self.shots else None
             return
 
-        self.page.wait_for_timeout(3500)
-        self.close_dialog()
-        self.page.wait_for_timeout(800)
+        # 点完不要关弹窗，否则读不到「今日已签」的确认状态
+        self.page.wait_for_timeout(4000)
 
         flat = self.text()
         signed = any(k in flat for k in SIGNED_HINTS)
