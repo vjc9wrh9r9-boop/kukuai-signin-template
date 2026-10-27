@@ -1,0 +1,110 @@
+name: 库库AI 每日签到
+
+on:
+  schedule:
+    # 每天 01:30 UTC = 北京时间 09:30
+    - cron: "30 1 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: kukuai-signin
+  cancel-in-progress: false
+
+jobs:
+  signin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 安装 Playwright
+        run: |
+          python -m pip install --quiet --upgrade pip
+          python -m pip install --quiet playwright
+          python -m playwright install --with-deps chromium
+
+      - name: 签到
+        env:
+          KUKUAI_COOKIES: ${{ secrets.KUKUAI_COOKIES }}
+        run: |
+          if [ -z "$KUKUAI_COOKIES" ]; then
+            echo "::error::没有配置 KUKUAI_COOKIES secret"
+            exit 1
+          fi
+          mkdir -p "$HOME/.kukuai"
+          printf '%s' "$KUKUAI_COOKIES" > "$HOME/.kukuai/cookies.json"
+          set -o pipefail
+          python kukuai_signin.py --cookies "$HOME/.kukuai/cookies.json" --out out | tee result.json
+
+      - name: 写摘要
+        if: always()
+        run: |
+          python - <<'PY'
+          import json, os
+          path = os.environ.get("GITHUB_STEP_SUMMARY")
+          try:
+              d = json.load(open("result.json", encoding="utf-8"))
+          except Exception:
+              msg = "### 库库AI 每日签到\n\n没有拿到 result.json，脚本可能启动失败，见上方日志。\n"
+              if path:
+                  open(path, "a", encoding="utf-8").write(msg)
+              raise SystemExit(0)
+          status_map = {"signed": "✅ 刚签到成功", "already": "✅ 今天已经签过",
+                        "unconfirmed": "⚠️ 没确认到签到结果", "probe": "🔍 只探测"}
+          lines = ["### 库库AI 每日签到", ""]
+          lines.append("- 结果：%s" % status_map.get(d.get("status"), d.get("status")))
+          if d.get("error"):
+              lines.append("- 错误：%s" % d["error"])
+          if d.get("streak") is not None:
+              lines.append("- 已连签：%s 天" % d["streak"])
+          n = d.get("next_node")
+          if n:
+              lines.append("- 下一档：连签 %s 天（还差 %s 天，%s）" % (n["day"], n["need"], n["reward"]))
+          if d.get("activity_days_left") is not None:
+              lines.append("- 活动剩余：%s 天" % d["activity_days_left"])
+          if path:
+              open(path, "a", encoding="utf-8").write("\n".join(lines) + "\n")
+          PY
+
+      - name: 上传截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signin-${{ github.run_id }}
+          path: out
+          retention-days: 7
+          if-no-files-found: ignore
+
+      - name: 失败开 issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          REASON=$(python -c "
+          import json
+          try:
+              d = json.load(open('result.json', encoding='utf-8'))
+              print(d.get('error') or d.get('stage') or 'unknown')
+          except Exception:
+              print('未产出 result.json，见运行日志')
+          " 2>/dev/null | tr '\n' ' ' | tr -d '"' | cut -c1-80)
+          [ -z "$REASON" ] && REASON="见运行日志"
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "签到失败 $(date -u +%Y-%m-%d)" \
+            --body "运行记录：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          原因：${REASON}
+
+          处理：
+          - 登录态失效 → 重新导出 BDUSS/STOKEN，更新 secret KUKUAI_COOKIES
+          - 验证码/风控 → 云端 IP 被拦，改用境内机器或在 Settings 里换 runner
+          " || true
