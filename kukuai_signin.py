@@ -208,6 +208,15 @@ class Session:
             waited += step
         return False
 
+    def wait_ready(self, timeout_s=20):
+        """等工作台真正渲染出来。云端偶发白屏（主区域空白），需要重载重试。"""
+        for _ in range(timeout_s * 2):
+            t = self.text()
+            if ("知识广场" in t or "新建任务" in t) and len(t) > 200:
+                return True
+            self.page.wait_for_timeout(500)
+        return False
+
     def dom_click(self, sel):
         """DOM 级点击：不经过命中测试，避免点到叠在上面的元素（比如会跳转的整张卡）。"""
         try:
@@ -314,6 +323,23 @@ class Session:
         self.close_dialog()
         self.page.wait_for_timeout(800)
 
+        # 云端偶发白屏：工作台没渲染出来时先重载一次，别急着点
+        for attempt in range(3):
+            if self.wait_ready(15):
+                break
+            self.log("page not rendered (attempt %d), reload" % (attempt + 1))
+            try:
+                self.page.goto(HOME_URL, wait_until="domcontentloaded")
+                self.page.wait_for_timeout(6000)
+                self.close_dialog()
+            except Exception as e:
+                self.log("reload failed: %s" % e)
+        else:
+            r.update(stage="render", error="页面多次重载仍未渲染出工作台（可能网络/CDN 被拦）")
+            self.shot("blank")
+            r["screenshot"] = self.shots[-1] if self.shots else None
+            return
+
         body = self.text()
         if any(k in body for k in RISK_HINTS):
             r.update(stage="risk", error="页面出现验证码/风控提示，已停止，请人工完成")
@@ -331,6 +357,25 @@ class Session:
             self.shot("dry-run")
             r["screenshot"] = self.shots[-1] if self.shots else None
             return
+
+        # 快路：签到卡 CTA 本身写着「签到 / 领取」时直接点，不必开弹窗
+        try:
+            cta = self.page.locator('[data-testid="signin-promo-cta"]')
+            if cta.count():
+                cta_txt = (cta.first.inner_text() or "").strip()
+                if any(k in cta_txt for k in ("签到", "领取")) and \
+                        not any(k in cta_txt for k in SIGNED_HINTS):
+                    cta.first.evaluate("e => e.click()")
+                    self.log("clicked card CTA: %s" % cta_txt)
+                    self.page.wait_for_timeout(4000)
+                    if any(k in self.text() for k in SIGNED_HINTS):
+                        r.update(ok=True, stage="done", status="signed", signed=True)
+                        r["streak"] = self._streak()
+                        self.shot("cta-signed")
+                        r["screenshot"] = self.shots[-1] if self.shots else None
+                        return
+        except Exception as e:
+            self.log("card CTA path failed: %s" % e)
 
         # 打开任务中心（签到按钮在那里）
         r["stage"] = "open-task-center"
