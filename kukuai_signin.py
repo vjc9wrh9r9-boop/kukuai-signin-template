@@ -208,6 +208,17 @@ class Session:
             waited += step
         return False
 
+    def goto_home(self, timeout_ms=60000, attempts=3):
+        """打开首页并重试。云端到站点的网络偶发超时，单次失败不代表站点挂了。"""
+        for i in range(attempts):
+            try:
+                self.page.goto(HOME_URL, wait_until="domcontentloaded", timeout=timeout_ms)
+                return True
+            except Exception as e:
+                self.log("goto attempt %d/%d failed: %s" % (i + 1, attempts, str(e)[:90]))
+                self.page.wait_for_timeout(3000)
+        return False
+
     def wait_ready(self, timeout_s=20):
         """等工作台真正渲染出来。云端偶发白屏（主区域空白），需要重载重试。"""
         for _ in range(timeout_s * 2):
@@ -231,14 +242,11 @@ class Session:
 
     def reset_home(self):
         """回到工作台首页。点错跳到 #/workbench/new-task 时，签到卡在那页不存在。"""
-        try:
-            self.page.goto(HOME_URL, wait_until="domcontentloaded")
-            self.page.wait_for_timeout(4500)
-            self.close_dialog()
-            return True
-        except Exception as e:
-            self.log("reset_home failed: %s" % e)
+        if not self.goto_home():
             return False
+        self.page.wait_for_timeout(4500)
+        self.close_dialog()
+        return True
 
     def open_center(self):
         """打开任务中心（签到按钮在里面）。
@@ -314,10 +322,10 @@ class Session:
 
     def _steps(self, r):
         r["stage"] = "open"
-        try:
-            self.page.goto(HOME_URL, wait_until="domcontentloaded")
-        except Exception as e:
-            r.update(stage="open", error="打开页面失败: %s" % e)
+        if not self.goto_home():
+            r.update(stage="open", error="打开页面失败（重试 3 次都超时，检查网络/代理）")
+            self.shot("goto-failed")
+            r["screenshot"] = self.shots[-1] if self.shots else None
             return
         self.page.wait_for_timeout(4500)
         self.close_dialog()
@@ -328,12 +336,9 @@ class Session:
             if self.wait_ready(15):
                 break
             self.log("page not rendered (attempt %d), reload" % (attempt + 1))
-            try:
-                self.page.goto(HOME_URL, wait_until="domcontentloaded")
-                self.page.wait_for_timeout(6000)
-                self.close_dialog()
-            except Exception as e:
-                self.log("reload failed: %s" % e)
+            self.goto_home()
+            self.page.wait_for_timeout(6000)
+            self.close_dialog()
         else:
             r.update(stage="render", error="页面多次重载仍未渲染出工作台（可能网络/CDN 被拦）")
             self.shot("blank")
