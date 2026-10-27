@@ -208,32 +208,54 @@ class Session:
             waited += step
         return False
 
-    def open_center(self):
-        """点签到卡标题 / 活动横幅把任务中心打开（签到按钮在里面）。
+    def dom_click(self, sel):
+        """DOM 级点击：不经过命中测试，避免点到叠在上面的元素（比如会跳转的整张卡）。"""
+        try:
+            loc = self.page.locator(sel)
+            if not loc.count():
+                return False
+            loc.first.evaluate("e => e.click()")
+            return True
+        except Exception as e:
+            self.log("dom_click %s failed: %s" % (sel, e))
+            return False
 
-        实测不同网络环境下可用的入口不一样：本机点标题行，云端点横幅行，
-        所以按顺序都试一遍，失败再刷新重试一轮。
+    def reset_home(self):
+        """回到工作台首页。点错跳到 #/workbench/new-task 时，签到卡在那页不存在。"""
+        try:
+            self.page.goto(HOME_URL, wait_until="domcontentloaded")
+            self.page.wait_for_timeout(4500)
+            self.close_dialog()
+            return True
+        except Exception as e:
+            self.log("reset_home failed: %s" % e)
+            return False
+
+    def open_center(self):
+        """打开任务中心（签到按钮在里面）。
+
+        实测：点签到卡标题在本机能开弹窗，但在云端会跳到「新建任务」空页，
+        那里没有签到卡。所以每次点完都检查 iframe，没有就回首页再换下一个入口。
         """
         if self.frame() is not None:
             return True
-        for sel in [SEL_SIGNIN_TITLE, "button.activity-banner", SEL_SIGNIN_CARD]:
-            if not self.click(sel):
-                continue
-            if self.wait_frame(5000):
-                self.log("task center opened via %s" % sel)
-                return True
-            self.log("clicked %s but no iframe" % sel)
-        # 刷新重试一次
-        try:
-            self.page.reload(wait_until="domcontentloaded")
-            self.page.wait_for_timeout(5000)
-            self.close_dialog()
-            for sel in ["button.activity-banner", SEL_SIGNIN_TITLE]:
-                if self.click(sel) and self.wait_frame(6000):
-                    self.log("task center opened after reload via %s" % sel)
+        entries = [
+            ("title-dom", lambda: self.dom_click(SEL_SIGNIN_TITLE)),
+            ("banner", lambda: self.click("button.activity-banner")),
+            ("card-dom", lambda: self.dom_click(SEL_SIGNIN_CARD)),
+        ]
+        for attempt in range(2):
+            if attempt and not self.reset_home():
+                return False
+            for name, action in entries:
+                if not action():
+                    continue
+                if self.wait_frame(5000):
+                    self.log("task center opened via %s" % name)
                     return True
-        except Exception as e:
-            self.log("reload retry failed: %s" % e)
+                self.log("%s clicked but no iframe, back home" % name)
+                if not self.reset_home():
+                    return False
         return False
 
     # --- 主流程 ---
