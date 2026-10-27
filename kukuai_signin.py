@@ -197,6 +197,45 @@ class Session:
             pass
         return False
 
+    def wait_frame(self, timeout_ms=8000):
+        """轮询等任务中心 iframe 出现。"""
+        step = 500
+        waited = 0
+        while waited <= timeout_ms:
+            if self.frame() is not None:
+                return True
+            self.page.wait_for_timeout(step)
+            waited += step
+        return False
+
+    def open_center(self):
+        """点签到卡标题 / 活动横幅把任务中心打开（签到按钮在里面）。
+
+        实测不同网络环境下可用的入口不一样：本机点标题行，云端点横幅行，
+        所以按顺序都试一遍，失败再刷新重试一轮。
+        """
+        if self.frame() is not None:
+            return True
+        for sel in [SEL_SIGNIN_TITLE, "button.activity-banner", SEL_SIGNIN_CARD]:
+            if not self.click(sel):
+                continue
+            if self.wait_frame(5000):
+                self.log("task center opened via %s" % sel)
+                return True
+            self.log("clicked %s but no iframe" % sel)
+        # 刷新重试一次
+        try:
+            self.page.reload(wait_until="domcontentloaded")
+            self.page.wait_for_timeout(5000)
+            self.close_dialog()
+            for sel in ["button.activity-banner", SEL_SIGNIN_TITLE]:
+                if self.click(sel) and self.wait_frame(6000):
+                    self.log("task center opened after reload via %s" % sel)
+                    return True
+        except Exception as e:
+            self.log("reload retry failed: %s" % e)
+        return False
+
     # --- 主流程 ---
     def run(self):
         r = {
@@ -273,11 +312,20 @@ class Session:
 
         # 打开任务中心（签到按钮在那里）
         r["stage"] = "open-task-center"
-        if self.frame() is None:
-            self.click(SEL_SIGNIN_TITLE) or self.click(SEL_SIGNIN_CARD)
-            self.page.wait_for_timeout(3500)
-            self.close_dialog()
-            self.page.wait_for_timeout(600)
+        if not self.open_center():
+            # 打不开也先看看页面是不是已经显示「今日已签」
+            if any(k in self.text() for k in SIGNED_HINTS):
+                r.update(ok=True, stage="done", status="already", signed=True)
+                self.shot("already")
+                r["screenshot"] = self.shots[-1] if self.shots else None
+                return
+            r.update(stage="open-task-center",
+                     error="没打开任务中心（签到按钮在内层 iframe 里），页面可能改版")
+            self.shot("no-center")
+            r["screenshot"] = self.shots[-1] if self.shots else None
+            return
+        self.close_dialog()
+        self.page.wait_for_timeout(800)
 
         streak = self._streak()
         r["streak"] = streak
