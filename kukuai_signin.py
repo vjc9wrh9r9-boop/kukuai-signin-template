@@ -208,6 +208,23 @@ class Session:
             waited += step
         return False
 
+    def wait_sign_state(self, timeout_ms=15000):
+        """等 iframe 里的签到按钮渲染出来（云端 iframe 加载比本机慢），或页面已显示已签。"""
+        waited = 0
+        while waited <= timeout_ms:
+            fr = self.frame()
+            if fr is not None:
+                try:
+                    if fr.locator(SEL_SIGN_BTN).count():
+                        return "button"
+                except Exception:
+                    pass
+            if any(k in self.text() for k in SIGNED_HINTS):
+                return "signed"
+            self.page.wait_for_timeout(800)
+            waited += 800
+        return None
+
     def goto_home(self, timeout_ms=60000, attempts=3):
         """打开首页并重试。云端到站点的网络偶发超时，单次失败不代表站点挂了。"""
         for i in range(attempts):
@@ -398,6 +415,15 @@ class Session:
             return
         # 注意：这里不能再点 activity-dialog-close，会把刚打开的任务中心一起关掉
         self.page.wait_for_timeout(1200)
+        state = self.wait_sign_state(15000)
+        if state == "signed":
+            r.update(ok=True, stage="done", status="already", signed=True)
+            r["streak"] = self._streak()
+            self.shot("already")
+            r["screenshot"] = self.shots[-1] if self.shots else None
+            return
+        if state is None:
+            self.log("sign button never rendered in iframe")
         if self.frame() is None and not self.open_center():
             r.update(stage="open-task-center", error="任务中心打开后又被关闭，重试失败")
             self.shot("center-closed")
