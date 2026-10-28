@@ -19,12 +19,15 @@
 - Name：`KUKUAI_COOKIES`
 - Secret：你的 Cookie JSON（两个域各一份）
 
+**别手抄**：用 GetCookie 工具抓，点「② 复制已抓取的 Cookie」，粘进 Secret 就行。抓出来是 2 条或 14 条都正常
+（2 条 = 登录在 `kuku.baidu.com`，14 条 = 登录在 `www.kukuai.cn`，脚本会自己认）。
+
+手贴的话格式长这样（最少两条）：
+
 ```json
 [
-  {"name":"BDUSS","value":"你的值","domain":".kukuai.cn","path":"/","httpOnly":true,"secure":true},
-  {"name":"STOKEN","value":"你的值","domain":".kukuai.cn","path":"/","secure":true},
   {"name":"BDUSS","value":"你的值","domain":".baidu.com","path":"/","httpOnly":true,"secure":true},
-  {"name":"STOKEN","value":"你的值","domain":".baidu.com","path":"/","secure":true}
+  {"name":"STOKEN","value":"你的值","domain":".kuku.baidu.com","path":"/","secure":true}
 ]
 ```
 
